@@ -73,8 +73,27 @@ App::App()
   // How it is actually performed is not trivial, but we can skip this for now.
   commandManager = etna::get_context().createPerFrameCmdMgr();
 
-
   // TODO: Initialize any additional resources you require here!
+
+  etna::create_program("local_shadertoy", {LOCAL_SHADERTOY_SHADERS_ROOT "toy.comp.spv"});
+
+  pipeline = etna::get_context().getPipelineManager().createComputePipeline("local_shadertoy", {});
+
+  image = etna::get_context().createImage({
+    .extent = vk::Extent3D{resolution.x, resolution.y, 1},
+    .name = "local_shadertoy",
+    .format = vk::Format::eR8G8B8A8Snorm,
+    .imageUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+      vk::ImageUsageFlagBits::eTransferSrc,
+    // VmaMemoryUsage memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY;
+    // vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
+    // std::size_t layers = 1;
+    // std::size_t mipLevels = 1;
+    // vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
+  });
+  defaultSampler = etna::Sampler(etna::Sampler::CreateInfo{.name = "default_sampler"});
+
+  mouse_pos = glm::vec2(resolution / 2u);
 }
 
 App::~App()
@@ -136,9 +155,88 @@ void App::drawFrame()
       // Usually, flushes should be placed before "action", i.e. compute dispatches
       // and blit/copy operations.
       etna::flush_barriers(currentCmdBuf);
-
-
       // TODO: Record your commands here!
+
+
+      etna::set_state(
+        currentCmdBuf,
+        image.get(),
+        vk::PipelineStageFlagBits2::eComputeShader,
+        vk::AccessFlagBits2::eShaderWrite,
+        vk::ImageLayout::eGeneral,
+        vk::ImageAspectFlagBits::eColor);
+      etna::flush_barriers(currentCmdBuf);
+
+
+      auto shaderInfo = etna::get_shader_program("local_shadertoy");
+
+      auto set = etna::create_descriptor_set(
+        shaderInfo.getDescriptorLayoutId(0),
+        currentCmdBuf,
+        {etna::Binding{0, image.genBinding(defaultSampler.get(), vk::ImageLayout::eGeneral)}});
+
+
+      currentCmdBuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getVkPipeline());
+      currentCmdBuf.bindDescriptorSets(
+        vk::PipelineBindPoint::eCompute, pipeline.getVkPipelineLayout(), 0, {set.getVkSet()}, {});
+
+
+      struct PushConstants
+      {
+        float time;
+        glm::vec2 resolution;
+        glm::vec2 mouse_pos;
+      };
+      PushConstants pushConstants;
+
+      pushConstants.time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now() - start_time)
+                             .count() /
+        1000.;
+
+      pushConstants.resolution = resolution;
+
+      if (osWindow.get()->mouse[MouseButton::mbLeft] == ButtonState::High)
+      {
+        mouse_pos = osWindow.get()->mouse.freePos;
+      }
+      pushConstants.mouse_pos = mouse_pos;
+
+      currentCmdBuf.pushConstants(
+        pipeline.getVkPipelineLayout(),
+        vk::ShaderStageFlagBits::eCompute,
+        0,
+        sizeof(PushConstants),
+        &pushConstants);
+
+      currentCmdBuf.dispatch(resolution.x / 32, resolution.y / 32, 1);
+
+      etna::set_state(
+        currentCmdBuf,
+        image.get(),
+        vk::PipelineStageFlagBits2::eTransfer,
+        vk::AccessFlagBits2::eTransferRead,
+        vk::ImageLayout::eTransferSrcOptimal,
+        vk::ImageAspectFlagBits::eColor);
+      etna::flush_barriers(currentCmdBuf);
+
+      vk::ImageBlit blitRegion{};
+      blitRegion.srcSubresource =
+        vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+      blitRegion.srcOffsets[1] = vk::Offset3D{int32_t(resolution.x), int32_t(resolution.y), 1};
+      blitRegion.dstSubresource =
+        vk::ImageSubresourceLayers{vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+      blitRegion.dstOffsets[1] = vk::Offset3D{int32_t(resolution.x), int32_t(resolution.y), 1};
+
+
+      currentCmdBuf.blitImage(
+        image.get(),
+        vk::ImageLayout::eTransferSrcOptimal,
+        backbuffer,
+        vk::ImageLayout::eTransferDstOptimal,
+        1,
+        &blitRegion,
+        vk::Filter::eNearest);
 
 
       // At the end of "rendering", we are required to change how the pixels of the
