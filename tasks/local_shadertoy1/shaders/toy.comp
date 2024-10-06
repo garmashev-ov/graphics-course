@@ -4,15 +4,217 @@ layout(local_size_x = 32, local_size_y = 32) in;
 
 layout(binding = 0, rgba8) uniform image2D resultImage;
 
+layout(push_constant) uniform PushConstants
+{
+  float iTime;
+  // vec2 iResolution;
+  float iResolution_x;
+  float iResolution_y;
+  // vec2 iMouse;
+  float iMouse_x;
+  float iMouse_y;
+}
+params;
+
+struct Surface
+{
+  float sd;
+  vec3 color;
+};
+
+mat3 rotateX(float theta)
+{
+  float c = cos(theta);
+  float s = sin(theta);
+  return mat3(vec3(1, 0, 0), vec3(0, c, -s), vec3(0, s, c));
+}
+
+// Rotation matrix around the Y axis.
+mat3 rotateY(float theta)
+{
+  float c = cos(theta);
+  float s = sin(theta);
+  return mat3(vec3(c, 0, s), vec3(0, 1, 0), vec3(-s, 0, c));
+}
+
+// Rotation matrix around the Z axis.
+mat3 rotateZ(float theta)
+{
+  float c = cos(theta);
+  float s = sin(theta);
+  return mat3(vec3(c, -s, 0), vec3(s, c, 0), vec3(0, 0, 1));
+}
+
+Surface minSD(in Surface s1, in Surface s2)
+{
+  if (s1.sd < s2.sd)
+  {
+    return s1;
+  }
+  return s2;
+}
+
+Surface sphere(in vec3 p, in vec3 offset)
+{
+  return Surface(length(p - offset) - 1.0, vec3(1, 0.5, 0.5));
+}
+
+Surface torus(in vec3 pos, in vec2 t, in vec3 offset)
+{
+  vec3 pt = (pos - offset) * rotateX(params.iTime * 0.3) * rotateY(params.iTime * 0.2) *
+    rotateX(params.iTime * 0.5);
+  vec2 q = vec2(length(pt.xz) - t.x, pt.y);
+
+  return Surface(length(q) - t.y, vec3(0, 1, 0));
+}
+
+Surface cube(in vec3 pos, in vec3 offset)
+{
+  vec3 pt =
+    abs((pos - offset) * rotateX(params.iTime) * rotateY(params.iTime) * rotateZ(params.iTime)) -
+    1.0;
+  Surface cube1 =
+    Surface(length(max(pt, 0.0)) + min(max(pt.x, max(pt.y, pt.z)), 0.0), vec3(0, 0, 1));
+  vec3 pt2 =
+    abs(
+      (pos - offset) * rotateX(params.iTime + 1.) * rotateY(params.iTime) * rotateZ(params.iTime)) -
+    1.0;
+  Surface cube2 =
+    Surface(length(max(pt2, 0.0)) + min(max(pt2.x, max(pt2.y, pt2.z)), 0.0), vec3(0, 0, 1));
+
+  return minSD(cube1, cube2);
+}
+
+Surface sdfFloor(vec3 p)
+{
+  return Surface(p.y + 10., vec3(cos(p.x), 0, cos(p.z)) + vec3(1));
+}
+
+
+Surface sdfScene(in vec3 p)
+{
+  return minSD(
+    minSD(minSD(torus(p, vec2(1, 0.5), vec3(-3, 0, -4)), sphere(p, vec3(4, 1, -3))), sdfFloor(p)),
+    cube(p, vec3(1, 0, -2)));
+}
+
+
+vec3 generateNormal(vec3 z)
+{
+  float e = 0.001;
+  float dx1 = sdfScene(z + vec3(e, 0, 0)).sd;
+  float dx2 = sdfScene(z - vec3(e, 0, 0)).sd;
+  float dy1 = sdfScene(z + vec3(0, e, 0)).sd;
+  float dy2 = sdfScene(z - vec3(0, e, 0)).sd;
+  float dz1 = sdfScene(z + vec3(0, 0, e)).sd;
+  float dz2 = sdfScene(z - vec3(0, 0, e)).sd;
+
+  return -normalize(vec3(dx1 - dx2, dy1 - dy2, dz1 - dz2));
+}
+
+
+#define MAX_ITERS 250
+#define MAX_DIST 200.0
+vec3 trace(vec3 from, vec3 dir, out bool hit, out int steps)
+{
+  vec3 p = from;
+  float totalDist = 0.0;
+
+  hit = false;
+
+  for (steps = 0; steps < MAX_ITERS; steps++)
+  {
+    Surface dist = sdfScene(p);
+
+    if (dist.sd < 0.00001)
+    {
+      hit = true;
+      break;
+    }
+
+    totalDist += dist.sd;
+
+    if (totalDist > MAX_DIST)
+      break;
+
+    p += dist.sd * dir;
+  }
+
+  return p;
+}
+
+mat3 camera(vec3 cameraPos, vec3 lookAtPoint)
+{
+  vec3 cd = normalize(lookAtPoint - cameraPos);  // camera direction
+  vec3 cr = normalize(cross(vec3(0, 1, 0), cd)); // camera right
+  vec3 cu = normalize(cross(cd, cr));            // camera up
+
+  return mat3(-cr, cu, -cd);
+}
+
+mat2 rotate2d(float theta)
+{
+  float s = sin(theta), c = cos(theta);
+  return mat2(c, -s, s, c);
+}
+
+vec3 powVec3(vec3 vec, float num)
+{
+  vec.x = pow(vec.x, num);
+  vec.y = pow(vec.y, num);
+  vec.z = pow(vec.z, num);
+  return vec;
+}
+
+
+#define PI 3.14159
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord)
+{
+  vec2 iResolution = vec2(params.iResolution_x, params.iResolution_y);
+  vec2 uv = (fragCoord - .5 * iResolution.xy) / iResolution.y;
+  uv.y = -uv.y;
+
+  vec2 iMouse = vec2(params.iMouse_x, params.iMouse_y);
+  vec2 mouseUV = iMouse.xy / iResolution.xy;
+
+  vec3 col = vec3(0.1, 0.1, 0.1);
+  vec3 lp = vec3(0, 0, 0); // lookat point (aka camera target)
+  vec3 ro = vec3(0, 3, 3); // ray origin that represents camera position
+  float cameraRadius = 2.;
+  ro.yz = ro.yz * cameraRadius * rotate2d(mix(PI / 2., 0., mouseUV.y));
+  ro.xz = ro.xz * rotate2d(mix(-PI, PI, mouseUV.x)) + vec2(lp.x, lp.z);
+  vec3 rd = camera(ro, lp) * normalize(vec3(uv, -1)); // ray direction
+  vec3 light = vec3(1, 6, 6);
+  
+  bool hit;
+  int steps;
+  vec3 p = trace(ro, rd, hit, steps);
+  vec3 light_dir = normalize(p - light);
+  vec3 normal = generateNormal(p);
+  if (hit)
+  {
+    vec3 specular =
+      pow(max(0., dot(normalize(light_dir + normalize(rd)), normal)), 500.) * vec3(1, 1, 1);
+    col = max(0.25, dot(normal, light_dir)) * sdfScene(p).color + specular;
+    vec3 light_p = trace(light, light_dir, hit, steps);
+    if (length(light_p - p) > 0.1)
+    {
+      col *= 0.5;
+    }
+  }
+
+  fragColor = vec4(powVec3(col, 1.2), 1);
+}
+
 
 void main()
 {
   ivec2 uv = ivec2(gl_GlobalInvocationID.xy);
 
-  // TODO: Put your shadertoy code here!
-  // Simple gradient as a test.
-  vec3 color = vec3(vec2(uv) / vec2(1280, 720), 0);
+  vec4 color = vec4(0, 0, 0, 0);
+  mainImage(color, uv);
 
   if (uv.x < 1280 && uv.y < 720)
-    imageStore(resultImage, uv, vec4(color, 1));
+    imageStore(resultImage, uv, color);
 }
