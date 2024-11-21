@@ -22,4 +22,18 @@ vec3 decode_normal(uint a_data)
   return vec3(x, y, z);
 }
 
+vec3 decode_normal_baked(uint a_data)
+{
+  const uint a_enc_x = (a_data  & 0x000000FFu);
+  const uint a_enc_y = ((a_data & 0x0000FF00u) >> 8);
+  const uint a_enc_z = ((a_data & 0x00FF0000u) >> 16);
+
+  vec3 normal = vec3(a_enc_x, a_enc_y, a_enc_z);
+  normal /= 255.;
+  normal *= 2.;
+  normal -= 1.;
+
+  return normalize(normal);
+}
+
 #endif // UNPACK_ATTRIBUTES_GLSL_INCLUDED
