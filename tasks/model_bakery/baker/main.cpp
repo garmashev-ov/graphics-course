@@ -185,25 +185,25 @@ static std::uint32_t encode_normal(glm::vec3 normal)
   return sx | sy | sz;
 }
 
-
 static std::uint32_t encode_best_fit_normal(glm::vec3 normal)
 {
   int window = 1;
   std::uint32_t bestFitNormal = encode_normal(normal);
-  glm::vec3 normalFirst = {bestFitNormal & 0xff, (bestFitNormal >> 8) & 0xff, (bestFitNormal >> 16) & 0xff};
+  glm::vec3 normalFirst = {
+    bestFitNormal & 0xff, (bestFitNormal >> 8) & 0xff, (bestFitNormal >> 16) & 0xff};
   normalFirst = normalFirst / 255.0f * 2.0f - 1.0f;
   double bestError = glm::length(normal - normalize(normalFirst));
-  
+
   for (int i = normal.x <= 0 ? -128 : -1; i < (normal.x <= 0 ? 1 : 127); ++i)
   {
-    int jlb = std::max(
-      -128, std::min(int(std::floor(float(i) * normal.y / normal.x)) - window, 127));
-    int jub = std::min(
-      127, std::max(int(std::ceil(float(i) * normal.y / normal.x)) + window, -128));
-    int klb = std::max(
-      -128, std::min(int(std::floor(float(i) * normal.z / normal.x)) - window, 127));
-    int kub = std::min(
-      127, std::max(int(std::ceil(float(i) * normal.z / normal.x)) + window, -128));
+    int jlb =
+      std::max(-128, std::min(int(std::floor(float(i) * normal.y / normal.x)) - window, 127));
+    int jub =
+      std::min(127, std::max(int(std::ceil(float(i) * normal.y / normal.x)) + window, -128));
+    int klb =
+      std::max(-128, std::min(int(std::floor(float(i) * normal.z / normal.x)) - window, 127));
+    int kub =
+      std::min(127, std::max(int(std::ceil(float(i) * normal.z / normal.x)) + window, -128));
 
     for (int j = jlb; j <= jub; ++j)
     {
@@ -227,7 +227,7 @@ static std::uint32_t encode_best_fit_normal(glm::vec3 normal)
 }
 
 
-ProcessedMeshes processMeshes(const tinygltf::Model& model)
+ProcessedMeshes processMeshes(const tinygltf::Model& model, bool use_best_fit_normals = false)
 {
   // NOTE: glTF assets can have pretty wonky data layouts which are not appropriate
   // for real-time rendering, so we have to press the data first. In serious engines
@@ -390,17 +390,20 @@ ProcessedMeshes processMeshes(const tinygltf::Model& model)
         if (hasTexcoord)
           std::memcpy(&texcoord, ptrs[4], sizeof(texcoord));
 
-        // spdlog::warn("using best fit normals, it will take some minutes");
-        vtx.positionAndNormal =
-          glm::vec4(pos, hasNormals? std::bit_cast<float>(encode_best_fit_normal(normal)) : 0.f);
-        vtx.texCoordAndTangentAndPadding =
-          glm::vec4(texcoord, hasTangents? std::bit_cast<float>(encode_best_fit_normal(tangent)) : 0.f, 0);
-
-        // vtx.positionAndNormal =
-        //   glm::vec4(pos, hasNormals? std::bit_cast<float>(encode_normal(normal)) : 0.f);
-        // vtx.texCoordAndTangentAndPadding =
-        //   glm::vec4(texcoord, hasTangents? std::bit_cast<float>(encode_normal(tangent)) : 0.f, 0);
-
+        if (use_best_fit_normals)
+        {
+          vtx.positionAndNormal =
+            glm::vec4(pos, hasNormals ? std::bit_cast<float>(encode_best_fit_normal(normal)) : 0.f);
+          vtx.texCoordAndTangentAndPadding = glm::vec4(
+            texcoord, hasTangents ? std::bit_cast<float>(encode_best_fit_normal(tangent)) : 0.f, 0);
+        }
+        else
+        {
+          vtx.positionAndNormal =
+            glm::vec4(pos, hasNormals ? std::bit_cast<float>(encode_normal(normal)) : 0.f);
+          vtx.texCoordAndTangentAndPadding = glm::vec4(
+            texcoord, hasTangents ? std::bit_cast<float>(encode_normal(tangent)) : 0.f, 0);
+        }
         ptrs[1] += strides[1];
         if (hasNormals)
           ptrs[2] += strides[2];
@@ -447,15 +450,27 @@ int main(int argc, char* argv[])
     argv[1] = (char*)"/home/oleg/graphics-course/resources/scenes/low_poly_dark_town/scene.gltf";
     // return -1;
   }
+  bool useBestFitNormals = false;
+  if (argc > 2)
+  {
+    useBestFitNormals = true;
+  }
   auto path = std::filesystem::path(argv[1]);
   auto maybeModel = loadModel(path);
   if (!maybeModel)
   {
     return -1;
   }
-  spdlog::warn("using best-fit normals, it may take some time");
+
+  if (useBestFitNormals)
+  {
+    spdlog::warn("using best-fit normals, it may take some time");
+  }
   auto model = std::move(*maybeModel);
-  auto [verts, inds, relems, meshs] = processMeshes(model);
+  model.extensionsUsed.push_back("KHR_mesh_quantization");
+  model.extensionsRequired.push_back("KHR_mesh_quantization");
+  
+  auto [verts, inds, relems, meshs] = processMeshes(model, useBestFitNormals);
 
   model.buffers.resize(1);
   model.buffers[0].data.resize(inds.size() * sizeof(int32_t) + verts.size() * sizeof(Vertex));
@@ -596,8 +611,6 @@ int main(int argc, char* argv[])
   model.accessors = std::move(accessors);
   tinygltf::TinyGLTF loader;
   auto outputPath = (path.parent_path() / path.stem()).string() + "_baked.gltf";
-  std::cout << outputPath << '\n';
   loader.WriteGltfSceneToFile(&model, outputPath, false, false, true, false);
   return 0;
 }
-

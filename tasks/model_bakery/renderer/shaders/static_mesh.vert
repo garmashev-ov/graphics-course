@@ -45,4 +45,3 @@ void main(void)
 
   gl_Position = params.mProjView * vec4(vOut.wPos, 1.0);
 }
-git 
