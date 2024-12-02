@@ -1,3 +1,4 @@
+#include <bit>
 #include <glm/geometric.hpp>
 #include <spdlog/spdlog.h>
 #include <string>
@@ -174,49 +175,46 @@ ProcessedInstances processInstances(const tinygltf::Model& model)
 
 static std::uint32_t encode_normal(glm::vec3 normal)
 {
-  const std::int32_t x = static_cast<std::int32_t>((normal.x + 1.f) / 2.f * 255.0f);
-  const std::int32_t y = static_cast<std::int32_t>((normal.y + 1.f) / 2.f * 255.0f);
-  const std::int32_t z = static_cast<std::int32_t>((normal.z + 1.f) / 2.f * 255.0f);
+  const std::uint32_t x = static_cast<std::uint32_t>(lround(normal.x * 127.0f) & 0xff);
+  const std::uint32_t y = static_cast<std::uint32_t>(lround(normal.y * 127.0f) & 0xff) << 8;
+  const std::uint32_t z = static_cast<std::uint32_t>(lround(normal.z * 127.0f) & 0xff) << 16;
 
-  const std::uint32_t sx = static_cast<std::uint32_t>(x);
-  const std::uint32_t sy = static_cast<std::uint32_t>(y) << 8;
-  const std::uint32_t sz = static_cast<std::uint32_t>(z) << 16;
-
-  return sx | sy | sz;
+  return std::bit_cast<std::uint32_t>(x | y | z);
 }
+
 
 static std::uint32_t encode_best_fit_normal(glm::vec3 normal)
 {
   int window = 1;
   std::uint32_t bestFitNormal = encode_normal(normal);
-  glm::vec3 normalFirst = {
+  glm::ivec3 normalFirst = {
     bestFitNormal & 0xff, (bestFitNormal >> 8) & 0xff, (bestFitNormal >> 16) & 0xff};
-  normalFirst = normalFirst / 255.0f * 2.0f - 1.0f;
-  double bestError = glm::length(normal - normalize(normalFirst));
+  normalFirst = ((normalFirst + 128) % 256) - 128;
+  double bestError = glm::length(normal - normalize(glm::vec3(normalFirst)));
 
-  for (int i = normal.x <= 0 ? -128 : -1; i < (normal.x <= 0 ? 1 : 127); ++i)
+  for (int i = normal.x <= 0 ? -127 : 0; i <= (normal.x <= 0 ? 0 : 127); ++i)
   {
     int jlb =
-      std::max(-128, std::min(int(std::floor(float(i) * normal.y / normal.x)) - window, 127));
+      std::max(-127, std::min(int(std::floor(float(i) * normal.y / normal.x)) - window, 127));
     int jub =
-      std::min(127, std::max(int(std::ceil(float(i) * normal.y / normal.x)) + window, -128));
+      std::min(127, std::max(int(std::ceil(float(i) * normal.y / normal.x)) + window, -127));
     int klb =
-      std::max(-128, std::min(int(std::floor(float(i) * normal.z / normal.x)) - window, 127));
+      std::max(-127, std::min(int(std::floor(float(i) * normal.z / normal.x)) - window, 127));
     int kub =
-      std::min(127, std::max(int(std::ceil(float(i) * normal.z / normal.x)) + window, -128));
+      std::min(127, std::max(int(std::ceil(float(i) * normal.z / normal.x)) + window, -127));
 
     for (int j = jlb; j <= jub; ++j)
     {
       for (int k = klb; k <= kub; ++k)
       {
-        glm::vec3 curNormal = {
-          (i + 128) / 127.5f - 1.f, (j + 128) / 127.5f - 1.f, (k + 128) / 127.5f - 1.f};
+        glm::vec3 curNormal = {i, j, k};
+        curNormal /= 127.0f;
         float curError = glm::length(glm::normalize(curNormal) - normal);
         if (curError < bestError)
         {
-          const std::uint32_t sx = static_cast<std::uint32_t>(i + 128);
-          const std::uint32_t sy = static_cast<std::uint32_t>(j + 128) << 8;
-          const std::uint32_t sz = static_cast<std::uint32_t>(k + 128) << 16;
+          const std::uint32_t sx = static_cast<std::uint32_t>((i + 256) % 256);
+          const std::uint32_t sy = static_cast<std::uint32_t>((j + 256) % 256) << 8;
+          const std::uint32_t sz = static_cast<std::uint32_t>((k + 256) % 256) << 16;
           bestFitNormal = sx | sy | sz;
           bestError = curError;
         }
@@ -562,7 +560,7 @@ int main(int argc, char* argv[])
       curAccessors[2].bufferView = 1;
       curAccessors[2].byteOffset = 12 + relem.vertexOffset * sizeof(Vertex);
       curAccessors[2].count = maxIndex + 1;
-      curAccessors[2].normalized = true;
+      curAccessors[2].normalized = !useBestFitNormals;
       curAccessors[2].componentType = TINYGLTF_COMPONENT_TYPE_BYTE;
       curAccessors[2].type = TINYGLTF_TYPE_VEC3;
 
