@@ -8,6 +8,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <etna/GlobalContext.hpp>
 #include <etna/OneShotCmdMgr.hpp>
+#include <stdexcept>
 
 
 SceneManager::SceneManager()
@@ -350,6 +351,47 @@ SceneManager::ProcessedMeshes SceneManager::processMeshes(const tinygltf::Model&
   return result;
 }
 
+SceneManager::ProcessedMeshes SceneManager::processMeshesBaked(const tinygltf::Model& model) const
+{
+  ProcessedMeshes result;
+  result.vertices.resize(model.bufferViews[1].byteLength / sizeof(Vertex));
+  result.indices.resize(model.bufferViews[0].byteLength / sizeof(std::uint32_t));
+  std::memcpy(result.indices.data(), model.buffers[0].data.data(), model.bufferViews[0].byteLength);
+  std::memcpy(
+    result.vertices.data(),
+    model.buffers[0].data.data() + model.bufferViews[1].byteOffset,
+    model.bufferViews[1].byteLength);
+
+  {
+    std::size_t totalPrimitives = 0;
+    for (const auto& mesh : model.meshes)
+      totalPrimitives += mesh.primitives.size();
+    result.relems.reserve(totalPrimitives);
+  }
+
+  result.meshes.reserve(model.meshes.size());
+  for (const auto& mesh : model.meshes)
+  {
+    result.meshes.push_back(Mesh{
+      .firstRelem = static_cast<std::uint32_t>(result.relems.size()),
+      .relemCount = static_cast<std::uint32_t>(mesh.primitives.size()),
+    });
+
+    for (const auto& prim : mesh.primitives)
+    {
+      auto& accessorInd = model.accessors[prim.indices];
+      auto& accessorPos = model.accessors[prim.attributes.at("POSITION")];
+
+      result.relems.push_back(RenderElement{
+        static_cast<std::uint32_t>(accessorPos.byteOffset / sizeof(Vertex)),
+        static_cast<std::uint32_t>(accessorInd.byteOffset / sizeof(std::uint32_t)),
+        static_cast<std::uint32_t>(accessorInd.count)});
+    }
+  }
+  return result;
+}
+
+
 void SceneManager::uploadData(
   std::span<const Vertex> vertices, std::span<const std::uint32_t> indices)
 {
@@ -388,12 +430,24 @@ void SceneManager::selectScene(std::filesystem::path path)
   instanceMatrices = std::move(instMats);
   instanceMeshes = std::move(instMeshes);
 
-  auto [verts, inds, relems, meshs] = processMeshes(model);
 
-  renderElements = std::move(relems);
-  meshes = std::move(meshs);
+  if (path.stem().string().ends_with("baked"))
+  {
+    spdlog::warn("using baked");
+    auto [verts, inds, relems, meshs] = processMeshesBaked(model);
+    renderElements = std::move(relems);
+    meshes = std::move(meshs);
 
-  uploadData(verts, inds);
+    uploadData(verts, inds);
+  }
+  else
+  {
+    auto [verts, inds, relems, meshs] = processMeshes(model);
+    renderElements = std::move(relems);
+    meshes = std::move(meshs);
+
+    uploadData(verts, inds);
+  }
 }
 
 etna::VertexByteStreamFormatDescription SceneManager::getVertexFormatDescription()
