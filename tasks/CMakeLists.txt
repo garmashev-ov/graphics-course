@@ -1,6 +1,5 @@
 include(${PROJECT_SOURCE_DIR}/cmake/common.cmake)
 set_option(TRACY_ENABLE "Enable profiling" ON)
-add_definitions(-DTRACY_ENABLE=ON)
 
 add_subdirectory(local_shadertoy1)
 add_subdirectory(local_shadertoy2)

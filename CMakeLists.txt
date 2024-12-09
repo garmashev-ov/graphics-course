@@ -22,12 +22,12 @@ if(false)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
   else()
     add_compile_options("/fsanitize=address")
+    add_compile_options("/fsanitize=address -Wall -Wextra -Werror -Wpedantic")
   endif()
 endif()
 
 # Uncomment to contribute to etna
 # set(CPM_etna_SOURCE "${PROJECT_SOURCE_DIR}/../etna")
-add_definitions(-DTRACY_ENABLE=ON)
 
 include("cmake/thirdparty.cmake")
 include("cmake/shaders.cmake")

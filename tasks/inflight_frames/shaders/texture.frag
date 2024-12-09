@@ -3,6 +3,7 @@
 layout(push_constant) uniform params_t
 {
   uvec2 iResolution;
+  vec2 padding;
 }
 params;
 
