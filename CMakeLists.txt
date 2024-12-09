@@ -22,6 +22,7 @@ if(false)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
   else()
     add_compile_options("/fsanitize=address")
+    add_compile_options("/fsanitize=address -Wall -Wextra -Werror -Wpedantic")
   endif()
 endif()
 
