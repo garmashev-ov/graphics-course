@@ -2,11 +2,13 @@
 #include "etna/DescriptorSet.hpp"
 #include "etna/Window.hpp"
 
+#include <cstdint>
 #include <etna/Etna.hpp>
 #include <etna/GlobalContext.hpp>
 #include <etna/PipelineManager.hpp>
 #include <etna/RenderTargetStates.hpp>
-
+#include <etna/BlockingTransferHelper.hpp>
+#include <memory>
 #include <vulkan/vulkan_enums.hpp>
 #include <stb_image.h>
 
@@ -80,15 +82,12 @@ App::App()
   // How it is actually performed is not trivial, but we can skip this for now.
   commandManager = etna::get_context().createPerFrameCmdMgr();
 
-  // TODO: Initialize any additional resources you require here!
-
-
   generatedTextureImage = etna::get_context().createImage({
     .extent = vk::Extent3D{resolution.x, resolution.y, 1},
     .name = "texture",
     .format = vk::Format::eB8G8R8A8Srgb,
     .imageUsage = vk::ImageUsageFlagBits::eColorAttachment |
-      vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc,
+      vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment,
   });
 
 
@@ -114,6 +113,76 @@ App::App()
 
 
   mouse_pos = glm::vec2(resolution / 2u);
+
+  {
+    int height, width, channels;
+    unsigned char* textureData = stbi_load(
+      GRAPHICS_COURSE_RESOURCES_ROOT "/textures/test_tex_1.png",
+      &width,
+      &height,
+      &channels,
+      4);
+    assert(textureData != nullptr);
+
+    loadedTextureImage1 = etna::get_context().createImage({
+      .extent = vk::Extent3D{(uint32_t)width, (uint32_t)height, 1},
+      .name = "loaded_texture",
+      .format = vk::Format::eR8G8B8A8Srgb,
+      .imageUsage =
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+    });
+
+    etna::BlockingTransferHelper transferHelper(
+      {.stagingSize = VkDeviceSize(width * height * 4)});
+
+    std::unique_ptr<etna::OneShotCmdMgr> oneShotCmdMgr =
+      etna::get_context().createOneShotCmdMgr();
+
+    transferHelper.uploadImage(
+      *oneShotCmdMgr,
+      loadedTextureImage1,
+      0,
+      0,
+      std::span<std::byte>(
+        reinterpret_cast<std::byte*>(textureData), width * height * 4));
+
+    stbi_image_free(textureData);
+  }
+
+  {
+    int height, width, channels;
+    unsigned char* textureData = stbi_load(
+      GRAPHICS_COURSE_RESOURCES_ROOT "/textures/texture1.bmp",
+      &width,
+      &height,
+      &channels,
+      4);
+    assert(textureData != nullptr);
+
+    loadedTextureImage2 = etna::get_context().createImage({
+      .extent = vk::Extent3D{(uint32_t)width, (uint32_t)height, 1},
+      .name = "loaded_texture2",
+      .format = vk::Format::eR8G8B8A8Srgb,
+      .imageUsage =
+        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+    });
+
+    etna::BlockingTransferHelper transferHelper(
+      {.stagingSize = VkDeviceSize(width * height * 4)});
+
+    std::unique_ptr<etna::OneShotCmdMgr> oneShotCmdMgr =
+      etna::get_context().createOneShotCmdMgr();
+
+    transferHelper.uploadImage(
+      *oneShotCmdMgr,
+      loadedTextureImage2,
+      0,
+      0,
+      std::span<std::byte>(
+        reinterpret_cast<std::byte*>(textureData), width * height * 4));
+
+    stbi_image_free(textureData);
+  }
 }
 
 App::~App()
@@ -140,47 +209,6 @@ void App::drawFrame()
   // First, get a command buffer to write GPU commands into.
   auto currentCmdBuf = commandManager->acquireNext();
 
-  if (!is_textures_loaded)
-  {
-    {
-      int height, width, channels;
-      unsigned char* textureData = stbi_load(
-        "../../../resources/textures/test_tex_1.png", &width, &height, &channels, 4);
-      assert(textureData != nullptr);
-
-      loadedTextureImage1 = etna::create_image_from_bytes(
-        {
-          .extent = vk::Extent3D{(uint32_t)width, (uint32_t)height, 1},
-          .name = "loaded_texture",
-          .format = vk::Format::eR8G8B8A8Srgb,
-          .imageUsage =
-            vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
-        },
-        currentCmdBuf,
-        textureData);
-
-      stbi_image_free(textureData);
-    }
-    {
-      int height, width, channels;
-      unsigned char* textureData = stbi_load(
-        "../../../resources/textures/texture1.bmp", &width, &height, &channels, 4);
-      assert(textureData != nullptr);
-
-      loadedTextureImage2 = etna::create_image_from_bytes(
-        {
-          .extent = vk::Extent3D{(uint32_t)width, (uint32_t)height, 1},
-          .name = "loaded_texture2",
-          .format = vk::Format::eR8G8B8A8Srgb,
-          .imageUsage =
-            vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
-        },
-        currentCmdBuf,
-        textureData);
-
-      stbi_image_free(textureData);
-    }
-  }
 
   // Next, tell Etna that we are going to start processing the next frame.
   etna::begin_frame();
@@ -196,41 +224,17 @@ void App::drawFrame()
 
     ETNA_CHECK_VK_RESULT(currentCmdBuf.begin(vk::CommandBufferBeginInfo{}));
     {
-      // First of all, we need to "initialize" th "backbuffer", aka the current swapchain
-      // image, into a state that is appropriate for us working with it. The initial state
-      // is considered to be "undefined" (aka "I contain trash memory"), by the way.
-      // "Transfer" in vulkanese means "copy or blit".
-      // Note that Etna sometimes calls this for you to make life simpler, read Etna's
-      // code!
       etna::set_state(
         currentCmdBuf,
-        backbuffer,
-        // We are going to use the texture at the transfer stage...
-        vk::PipelineStageFlagBits2::eTransfer,
-        // ...to transfer-write stuff into it...
-        vk::AccessFlagBits2::eTransferWrite,
-        // ...and want it to have the appropriate layout.
-        vk::ImageLayout::eTransferDstOptimal,
+        generatedTextureImage.get(),
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::ImageLayout::eColorAttachmentOptimal,
         vk::ImageAspectFlagBits::eColor);
-      // The set_state doesn't actually record any commands, they are deferred to
-      // the moment you call flush_barriers.
-      // As with set_state, Etna sometimes flushes on it's own.
-      // Usually, flushes should be placed before "action", i.e. compute dispatches
-      // and blit/copy operations.
       etna::flush_barriers(currentCmdBuf);
-      // TODO: Record your commands here!
 
       if (!is_textures_loaded)
       {
-        etna::set_state(
-          currentCmdBuf,
-          generatedTextureImage.get(),
-          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-          vk::AccessFlagBits2::eColorAttachmentWrite,
-          vk::ImageLayout::eColorAttachmentOptimal,
-          vk::ImageAspectFlagBits::eColor);
-        etna::flush_barriers(currentCmdBuf);
-
         {
           etna::RenderTargetState state{
             currentCmdBuf,
@@ -257,23 +261,7 @@ void App::drawFrame()
         currentCmdBuf,
         generatedTextureImage.get(),
         vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::AccessFlagBits2::eColorAttachmentRead,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        vk::ImageAspectFlagBits::eColor);
-
-      etna::set_state(
-        currentCmdBuf,
-        loadedTextureImage1.get(),
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::AccessFlagBits2::eColorAttachmentRead,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        vk::ImageAspectFlagBits::eColor);
-
-      etna::set_state(
-        currentCmdBuf,
-        loadedTextureImage2.get(),
-        vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::AccessFlagBits2::eColorAttachmentRead,
+        vk::AccessFlagBits2::eShaderRead,
         vk::ImageLayout::eShaderReadOnlyOptimal,
         vk::ImageAspectFlagBits::eColor);
 
@@ -328,7 +316,7 @@ void App::drawFrame()
         pushConstants.time = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::system_clock::now() - start_time)
                                .count() /
-          1000.;
+          1000.f;
 
         pushConstants.resolution = resolution;
 
